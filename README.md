@@ -14,7 +14,14 @@ An Obsidian plugin that imports FMOD Studio event data into your vault as markdo
 
 ## Installation
 
-### Plugin Installation
+### From Community Plugins (Recommended)
+
+1. Open Obsidian Settings > Community plugins
+2. Disable Safe mode if prompted
+3. Click Browse and search for "FMOD Sync"
+4. Click Install, then Enable
+
+### Manual Installation
 
 1. Build the plugin:
    ```bash
