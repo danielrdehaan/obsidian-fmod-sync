@@ -23,17 +23,17 @@ export function generateMarkdown(
 
 	// FMOD-managed properties that will be overwritten
 	const fmodProperties = [
-		"status",
-		"guid",
-		"project",
-		"banks",
-		"folder_path",
-		"full_path",
-		"loop_type",
-		"space",
-		"max_voices",
-		"parameters",
-		"last_synced",
+		"fmod_status",
+		"fmod_guid",
+		"fmod_project",
+		"fmod_banks",
+		"fmod_folder_path",
+		"fmod_full_path",
+		"fmod_loop_type",
+		"fmod_space",
+		"fmod_max_voices",
+		"fmod_parameters",
+		"fmod_last_synced",
 	];
 
 	// Build merged properties
@@ -47,40 +47,40 @@ export function generateMarkdown(
 	}
 
 	// Then add FMOD properties
-	mergedProps["status"] = "exists";
-	mergedProps["guid"] = event.guid;
-	mergedProps["project"] = projectName;
+	mergedProps["fmod_status"] = "exists";
+	mergedProps["fmod_guid"] = event.guid;
+	mergedProps["fmod_project"] = projectName;
 	if (event.banks.length > 0) {
-		mergedProps["banks"] = event.banks;
+		mergedProps["fmod_banks"] = event.banks;
 	}
-	mergedProps["folder_path"] = event.folder_path;
-	mergedProps["full_path"] = event.full_path;
-	mergedProps["loop_type"] = event.loop_type;
-	mergedProps["space"] = event.space;
+	mergedProps["fmod_folder_path"] = event.folder_path;
+	mergedProps["fmod_full_path"] = event.full_path;
+	mergedProps["fmod_loop_type"] = event.loop_type;
+	mergedProps["fmod_space"] = event.space;
 	if (event.max_voices !== "" && event.max_voices !== undefined) {
-		mergedProps["max_voices"] = event.max_voices;
+		mergedProps["fmod_max_voices"] = event.max_voices;
 	}
 	if (event.parameters.length > 0) {
-		mergedProps["parameters"] = event.parameters.map((p) => p.name);
+		mergedProps["fmod_parameters"] = event.parameters.map((p) => p.name);
 	}
-	mergedProps["last_synced"] = exportedAt;
+	mergedProps["fmod_last_synced"] = exportedAt;
 
 	// Build YAML frontmatter
 	let yaml = "---\n";
 
 	// Output FMOD properties in order
 	const orderedKeys = [
-		"status",
-		"guid",
-		"project",
-		"banks",
-		"folder_path",
-		"full_path",
-		"loop_type",
-		"space",
-		"max_voices",
-		"parameters",
-		"last_synced",
+		"fmod_status",
+		"fmod_guid",
+		"fmod_project",
+		"fmod_banks",
+		"fmod_folder_path",
+		"fmod_full_path",
+		"fmod_loop_type",
+		"fmod_space",
+		"fmod_max_voices",
+		"fmod_parameters",
+		"fmod_last_synced",
 	];
 
 	const usedKeys = new Set<string>();
@@ -104,7 +104,7 @@ export function generateMarkdown(
 	yaml += "---\n\n";
 
 	// Build markdown body
-	let md = `# ${event.name}\n\n`;
+	let md = "";
 
 	// Parameters section
 	if (event.parameters.length > 0) {

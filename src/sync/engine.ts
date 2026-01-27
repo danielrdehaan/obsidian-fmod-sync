@@ -98,7 +98,7 @@ export async function syncSingleProject(
 
 	for (const [notePath, content] of existingNotes) {
 		const frontmatter = parseFrontmatter(content);
-		const guid = frontmatter.properties["guid"] as string | undefined;
+		const guid = frontmatter.properties["fmod_guid"] as string | undefined;
 		const filename = notePath.split("/").pop()?.replace(".md", "") || "";
 
 		if (guid) {

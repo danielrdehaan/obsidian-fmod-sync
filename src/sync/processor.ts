@@ -98,7 +98,7 @@ export async function processEvent(
 	} else if (existingByName) {
 		// Name match - might be a planned event or coincidence
 		const frontmatter = parseFrontmatter(existingByName.content);
-		const existingGuid = frontmatter.properties["guid"];
+		const existingGuid = frontmatter.properties["fmod_guid"];
 
 		if (!existingGuid) {
 			// No GUID = planned event, link it
