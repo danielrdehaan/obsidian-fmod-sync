@@ -1,0 +1,655 @@
+studio.menu.addMenuItem({
+    name: "DRD\\Export for Obsidian...",
+    execute: function () {
+        var t0 = Date.now();
+
+        // -------------------------
+        // Helpers (reused from CSV Exporter)
+        // -------------------------
+        function safeGet(obj, keyPath) {
+            try {
+                var parts = keyPath.split(".");
+                var cur = obj;
+                for (var i = 0; i < parts.length; i++) {
+                    if (!cur) return "";
+                    cur = cur[parts[i]];
+                }
+                return (cur === undefined || cur === null) ? "" : cur;
+            } catch (e) {
+                return "";
+            }
+        }
+
+        function tryCall(fn, fallback) {
+            try { return fn(); } catch (e) { return fallback; }
+        }
+
+        function isLikelySpatialiserEffect(effectObj) {
+            var t = "";
+            try { t = effectObj && effectObj.type ? ("" + effectObj.type) : ""; } catch (e) { }
+            if (!t) {
+                try { t = effectObj && effectObj.isOfExactType ? "" : ""; } catch (e) { }
+            }
+
+            try {
+                if (effectObj && effectObj.isOfExactType) {
+                    if (effectObj.isOfExactType("SpatialiserEffect")) return true;
+                    if (effectObj.isOfExactType("ObjectSpatialiserEffect")) return true;
+                }
+            } catch (e) { }
+
+            var name = "";
+            try { name = effectObj && effectObj.name ? ("" + effectObj.name) : ""; } catch (e) { }
+            var typeName = "";
+            try { typeName = effectObj && effectObj.type ? ("" + effectObj.type) : ""; } catch (e) { }
+
+            var blob = (name + " " + typeName).toLowerCase();
+            return (blob.indexOf("spatial") >= 0);
+        }
+
+        function detectSpace(e) {
+            try {
+                if (e.masterTrack && e.masterTrack.mixerGroup && e.masterTrack.mixerGroup.relationships.effectChain) {
+                    var chain = e.masterTrack.mixerGroup.relationships.effectChain.destinations[0];
+                    if (chain && chain.relationships.effects) {
+                        var effects = chain.relationships.effects.destinations;
+                        for (var i = 0; i < effects.length; i++) {
+                            if (isLikelySpatialiserEffect(effects[i])) return "3D";
+                        }
+                    }
+                }
+
+                if (e.relationships && e.relationships.returnTracks && e.relationships.returnTracks.destinations) {
+                    var rts = e.relationships.returnTracks.destinations;
+                    for (var r = 0; r < rts.length; r++) {
+                        var rt = rts[r];
+                        if (rt && rt.mixerGroup && rt.mixerGroup.relationships.effectChain) {
+                            var rchain = rt.mixerGroup.relationships.effectChain.destinations[0];
+                            if (rchain && rchain.relationships.effects) {
+                                var reffects = rchain.relationships.effects.destinations;
+                                for (var j = 0; j < reffects.length; j++) {
+                                    if (isLikelySpatialiserEffect(reffects[j])) return "3D";
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return "2D";
+            } catch (err) {
+                return "Unknown";
+            }
+        }
+
+        function detectLoopType(e) {
+            try {
+                if (e.timeline && e.timeline.relationships.markers) {
+                    var markers = e.timeline.relationships.markers.destinations;
+                    for (var i = 0; i < markers.length; i++) {
+                        if (markers[i].isOfExactType && markers[i].isOfExactType("LoopRegion")) {
+                            return "Loop";
+                        }
+                    }
+                }
+            } catch (e) { }
+            return "One-shot";
+        }
+
+        function getFolderPathFromEventPath(eventPath) {
+            var cleanPath = (eventPath || "").replace("event:/", "");
+            var parts = cleanPath.split("/");
+            if (parts.length <= 1) return "";
+            parts.pop();
+            return parts.join("/");
+        }
+
+        function getBankNames(e) {
+            try {
+                if (e.relationships.banks && e.relationships.banks.destinations && e.relationships.banks.destinations.length > 0) {
+                    var names = e.relationships.banks.destinations.map(function (b) { return b.name; }).filter(Boolean);
+                    names.sort();
+                    return names;
+                }
+            } catch (err) { }
+            return [];
+        }
+
+        function getUserProperties(e) {
+            var props = [];
+            try {
+                if (!e.userProperties || e.userProperties.length === 0) return props;
+                for (var i = 0; i < e.userProperties.length; i++) {
+                    var p = e.userProperties[i];
+
+                    var key = tryCall(function () { return p.name; }, "");
+                    var typ = tryCall(function () { return p.type; }, "");
+                    var val = "";
+
+                    val = tryCall(function () { return p.value; }, "");
+                    if (val === "" || val === undefined || val === null) {
+                        val = tryCall(function () { return p.stringValue; }, "");
+                    }
+                    if (val === "" || val === undefined || val === null) {
+                        val = tryCall(function () { return p.intValue; }, "");
+                    }
+                    if (val === "" || val === undefined || val === null) {
+                        val = tryCall(function () { return p.floatValue; }, "");
+                    }
+                    if (val === "" || val === undefined || val === null) {
+                        val = tryCall(function () { return p.boolValue; }, "");
+                    }
+
+                    props.push({ name: key, type: typ, value: val });
+                }
+                props.sort(function(a, b) { return a.name < b.name ? -1 : 1; });
+            } catch (err) { }
+            return props;
+        }
+
+        function getNotesString(e) {
+            var candidates = ["notes", "note", "comment", "comments", "description"];
+            for (var i = 0; i < candidates.length; i++) {
+                var v = safeGet(e, candidates[i]);
+                if (v !== "" && v !== null && v !== undefined) return v;
+            }
+            return "";
+        }
+
+        function getParameterDetails(p) {
+            var name = tryCall(function () { return (p.presetOwner) ? p.presetOwner.name : p.name; }, "");
+            if (!name) name = tryCall(function () { return p.name; }, "");
+
+            var preset = tryCall(function () { return p.preset || (p.presetOwner ? p.presetOwner.preset : null) || p; }, p);
+
+            var typ = tryCall(function () { return preset.type; }, "");
+            var min = tryCall(function () { return preset.min; }, "");
+            var max = tryCall(function () { return preset.max; }, "");
+            var init = tryCall(function () { return preset.initialValue; }, "");
+            var labels = tryCall(function () { return preset.enumerationLabels; }, "");
+
+            var labelStr = "";
+            if (labels && labels.length && typeof labels.join === "function") {
+                labelStr = labels.join(", ");
+            }
+
+            return {
+                name: name,
+                type: typ,
+                min: min,
+                max: max,
+                initial: init,
+                labels: labelStr
+            };
+        }
+
+        function collectEventParameters(e) {
+            var byName = {};
+
+            function addParam(p) {
+                var details = getParameterDetails(p);
+                if (!details.name || details.name === "undefined") return;
+                byName[details.name] = details;
+            }
+
+            try {
+                if (typeof e.getParameterPresets === "function") {
+                    e.getParameterPresets().forEach(addParam);
+                }
+            } catch (err) { }
+
+            var rels = ["parameters", "userParameters"];
+            rels.forEach(function (relName) {
+                try {
+                    if (e.relationships && e.relationships[relName] && e.relationships[relName].destinations) {
+                        e.relationships[relName].destinations.forEach(function (proxy) {
+                            var pObj = null;
+                            try { if (proxy.relationships && proxy.relationships.parameter) pObj = proxy.relationships.parameter.destinations[0]; } catch (e) { }
+                            try { if (!pObj && proxy.relationships && proxy.relationships.preset) pObj = proxy.relationships.preset.destinations[0]; } catch (e) { }
+                            if (pObj) addParam(pObj);
+                        });
+                    }
+                } catch (err) { }
+            });
+
+            var names = Object.keys(byName).sort();
+            return names.map(function (n) { return byName[n]; });
+        }
+
+        // -------------------------
+        // Audio file extraction - build event->audiofiles map
+        // -------------------------
+        function buildEventAudioFilesMap() {
+            var eventAudioFiles = {}; // eventId -> array of {path, asset_path}
+
+            // Get project path for constructing absolute paths
+            var projectPath = studio.project.filePath || "";
+            var projectDirectory = projectPath.substring(0, projectPath.lastIndexOf("/"));
+            var assetsDirectory = projectDirectory + "/Assets";
+
+            // Get all SingleSound instances
+            try {
+                var singleSounds = studio.project.model.SingleSound.findInstances();
+
+                for (var i = 0; i < singleSounds.length; i++) {
+                    var sound = singleSounds[i];
+
+                    // Get the audio file
+                    var audioFile = null;
+                    try {
+                        if (sound.audioFile) {
+                            audioFile = sound.audioFile;
+                        } else if (sound.relationships && sound.relationships.audioFile &&
+                                   sound.relationships.audioFile.destinations &&
+                                   sound.relationships.audioFile.destinations.length > 0) {
+                            audioFile = sound.relationships.audioFile.destinations[0];
+                        }
+                    } catch (err) { }
+
+                    if (!audioFile) continue;
+
+                    // Get the event via the parameter (Timeline) -> event relationship
+                    var eventId = null;
+                    try {
+                        var timeline = sound.parameter;
+                        if (!timeline && sound.relationships && sound.relationships.parameter &&
+                            sound.relationships.parameter.destinations &&
+                            sound.relationships.parameter.destinations.length > 0) {
+                            timeline = sound.relationships.parameter.destinations[0];
+                        }
+
+                        if (timeline) {
+                            // Timeline might be the actual timeline or a ParameterProxy
+                            var event = null;
+                            if (timeline.entity === "Timeline") {
+                                // Direct timeline - get event
+                                if (timeline.relationships && timeline.relationships.event &&
+                                    timeline.relationships.event.destinations &&
+                                    timeline.relationships.event.destinations.length > 0) {
+                                    event = timeline.relationships.event.destinations[0];
+                                }
+                            } else if (timeline.entity === "ParameterProxy") {
+                                // Need to find the event that owns this parameter
+                                // Check the audioTrack -> event path instead
+                                var audioTrack = sound.audioTrack;
+                                if (!audioTrack && sound.relationships && sound.relationships.audioTrack &&
+                                    sound.relationships.audioTrack.destinations &&
+                                    sound.relationships.audioTrack.destinations.length > 0) {
+                                    audioTrack = sound.relationships.audioTrack.destinations[0];
+                                }
+                                if (audioTrack) {
+                                    // Track has event relationship
+                                    if (audioTrack.relationships && audioTrack.relationships.event &&
+                                        audioTrack.relationships.event.destinations &&
+                                        audioTrack.relationships.event.destinations.length > 0) {
+                                        event = audioTrack.relationships.event.destinations[0];
+                                    }
+                                }
+                            }
+
+                            if (event && event.id) {
+                                eventId = event.id;
+                            }
+                        }
+
+                        // Fallback: try audioTrack -> event
+                        if (!eventId) {
+                            var audioTrack = sound.audioTrack;
+                            if (!audioTrack && sound.relationships && sound.relationships.audioTrack &&
+                                sound.relationships.audioTrack.destinations &&
+                                sound.relationships.audioTrack.destinations.length > 0) {
+                                audioTrack = sound.relationships.audioTrack.destinations[0];
+                            }
+                            if (audioTrack) {
+                                if (audioTrack.relationships && audioTrack.relationships.event &&
+                                    audioTrack.relationships.event.destinations &&
+                                    audioTrack.relationships.event.destinations.length > 0) {
+                                    var event = audioTrack.relationships.event.destinations[0];
+                                    if (event && event.id) {
+                                        eventId = event.id;
+                                    }
+                                }
+                            }
+                        }
+                    } catch (err) { }
+
+                    if (!eventId) continue;
+
+                    // Extract audio file info
+                    var assetPath = "";
+                    var absolutePath = "";
+                    try {
+                        assetPath = audioFile.assetPath || "";
+                        if (assetPath) {
+                            absolutePath = assetsDirectory + "/" + assetPath;
+                        }
+                    } catch (err) { }
+
+                    if (!assetPath) continue;
+
+                    // Add to map
+                    if (!eventAudioFiles[eventId]) {
+                        eventAudioFiles[eventId] = [];
+                    }
+
+                    // Check for duplicates
+                    var isDuplicate = false;
+                    for (var j = 0; j < eventAudioFiles[eventId].length; j++) {
+                        if (eventAudioFiles[eventId][j].asset_path === assetPath) {
+                            isDuplicate = true;
+                            break;
+                        }
+                    }
+
+                    if (!isDuplicate) {
+                        eventAudioFiles[eventId].push({
+                            path: absolutePath,
+                            asset_path: assetPath
+                        });
+                    }
+                }
+            } catch (err) {
+                console.log("Error collecting SingleSound audio files: " + err);
+            }
+
+            return eventAudioFiles;
+        }
+
+        // -------------------------
+        // Timestamp helpers
+        // -------------------------
+        function pad2(n) { return (n < 10 ? "0" : "") + n; }
+
+        function getISOTimestamp() {
+            var now = new Date();
+            return now.getFullYear() + "-" + pad2(now.getMonth() + 1) + "-" + pad2(now.getDate()) +
+                   "T" + pad2(now.getHours()) + ":" + pad2(now.getMinutes()) + ":" + pad2(now.getSeconds());
+        }
+
+        function getFilenameTimestamp() {
+            var now = new Date();
+            return now.getFullYear() + "-" + pad2(now.getMonth() + 1) + "-" + pad2(now.getDate()) +
+                   "_" + pad2(now.getHours()) + pad2(now.getMinutes()) + pad2(now.getSeconds());
+        }
+
+        // -------------------------
+        // Settings persistence
+        // -------------------------
+
+        // Store preferences in project directory (add to .gitignore if needed)
+        function getPrefsFilePath(projectDir) {
+            return projectDir + "/.obsidian-fmod-sync-prefs";
+        }
+
+        function getLastExportDirectory(projectDir) {
+            var prefsPath = getPrefsFilePath(projectDir);
+            try {
+                var file = studio.system.getFile(prefsPath);
+                if (file.exists() && file.open(studio.system.openMode.ReadOnly)) {
+                    // readText requires a size argument - use file size or a large enough buffer
+                    var size = file.size();
+                    var content = file.readText(size);
+                    file.close();
+                    if (content && content.trim() !== "") {
+                        var prefs = JSON.parse(content);
+                        return prefs.lastExportDirectory || null;
+                    }
+                }
+            } catch (e) { }
+            return null;
+        }
+
+        function saveLastExportDirectory(projectDir, dir) {
+            try {
+                var prefsPath = getPrefsFilePath(projectDir);
+                var prefs = { lastExportDirectory: dir };
+                var file = studio.system.getFile(prefsPath);
+                if (file.open(studio.system.openMode.WriteOnly)) {
+                    file.writeText(JSON.stringify(prefs, null, 2));
+                    file.close();
+                }
+            } catch (e) { }
+        }
+
+        // -------------------------
+        // Main export logic
+        // -------------------------
+
+        // Get project info
+        var projectPath = studio.project.filePath || "";
+        var projectDirectory = projectPath.substring(0, projectPath.lastIndexOf("/"));
+        var projectName = projectPath.substring(projectPath.lastIndexOf("/") + 1).replace(/\.fspro$/i, "");
+
+        // Default output directory: use last export directory if available, otherwise project directory
+        var lastDir = getLastExportDirectory(projectDirectory);
+        var outputDirectory = lastDir || projectDirectory;
+
+        // Generate filename preview
+        var filenamePreview = projectName + "_" + getFilenameTimestamp() + ".json";
+
+        // Ask user for output directory
+        var cancelled = false;
+        studio.ui.showModalDialog({
+            windowTitle: "Export for Obsidian",
+            widgetType: studio.ui.widgetType.Layout,
+            layout: studio.ui.layoutType.VBoxLayout,
+            spacing: 10,
+            contentsMargins: { left: 12, top: 12, right: 12, bottom: 12 },
+            minimumSize: { width: 640, height: 0 },
+            items: [
+                {
+                    widgetType: studio.ui.widgetType.Label,
+                    text: "Export FMOD events to JSON for Obsidian sync.\n\nThe Obsidian plugin will read this file and create markdown notes."
+                },
+                {
+                    widgetType: studio.ui.widgetType.Label,
+                    text: " "
+                },
+                {
+                    widgetType: studio.ui.widgetType.Label,
+                    text: "Output directory:"
+                },
+                {
+                    widgetType: studio.ui.widgetType.PathLineEdit,
+                    widgetId: "outputDirectory",
+                    windowTitle: "Select Output Directory",
+                    text: outputDirectory,
+                    minimumWidth: 560,
+                    sizePolicy: { horizontalPolicy: studio.ui.sizePolicy.MinimumExpanding },
+                    pathType: studio.ui.pathType.Directory,
+                    onEditingFinished: function () { outputDirectory = this.text(); }
+                },
+                {
+                    widgetType: studio.ui.widgetType.Label,
+                    text: " "
+                },
+                {
+                    widgetType: studio.ui.widgetType.Label,
+                    widgetId: "filenameLabel",
+                    text: "Filename: " + filenamePreview
+                },
+                {
+                    widgetType: studio.ui.widgetType.Layout,
+                    layout: studio.ui.layoutType.HBoxLayout,
+                    spacing: 10,
+                    items: [
+                        {
+                            widgetType: studio.ui.widgetType.Spacer,
+                            sizePolicy: { horizontalPolicy: studio.ui.sizePolicy.MinimumExpanding }
+                        },
+                        {
+                            widgetType: studio.ui.widgetType.PushButton,
+                            text: "Cancel",
+                            onClicked: function () {
+                                cancelled = true;
+                                this.closeDialog();
+                            }
+                        },
+                        {
+                            widgetType: studio.ui.widgetType.PushButton,
+                            text: "Export",
+                            onClicked: function () {
+                                try { outputDirectory = this.findWidget("outputDirectory").text(); } catch (e) { }
+                                this.closeDialog();
+                            }
+                        }
+                    ]
+                }
+            ]
+        });
+
+        if (cancelled) {
+            return;
+        }
+
+        if (!outputDirectory || outputDirectory.trim() === "") {
+            alert("No output directory specified.");
+            return;
+        }
+
+        // Generate the full output path with timestamp
+        var outputFilename = projectName + "_" + getFilenameTimestamp() + ".json";
+        var outputPath = outputDirectory + "/" + outputFilename;
+
+        // Build event -> audio files map
+        var eventAudioFilesMap = buildEventAudioFilesMap();
+
+        // Collect all FMOD events
+        var allEvents = studio.project.model.Event.findInstances();
+        allEvents.sort(function (a, b) {
+            var pa = tryCall(function () { return a.getPath(); }, "");
+            var pb = tryCall(function () { return b.getPath(); }, "");
+            if (pa < pb) return -1;
+            if (pa > pb) return 1;
+            return 0;
+        });
+
+        // Build events array for JSON
+        var eventsData = [];
+        var totalAudioFiles = 0;
+
+        for (var i = 0; i < allEvents.length; i++) {
+            var e = allEvents[i];
+
+            try {
+                var eventPath = e.getPath();
+                var eventName = e.name;
+                var eventGuid = e.id;
+                var folderPath = getFolderPathFromEventPath(eventPath);
+
+                var maxVoices = "";
+                try {
+                    if (e.automatableProperties && e.automatableProperties.maxVoices !== undefined) {
+                        maxVoices = e.automatableProperties.maxVoices;
+                    }
+                } catch (err) { }
+
+                // Get audio files for this event from the pre-built map
+                var audioFiles = eventAudioFilesMap[eventGuid] || [];
+                totalAudioFiles += audioFiles.length;
+
+                // Sort audio files by asset path
+                audioFiles.sort(function(a, b) {
+                    return a.asset_path < b.asset_path ? -1 : (a.asset_path > b.asset_path ? 1 : 0);
+                });
+
+                var eventData = {
+                    name: eventName,
+                    guid: eventGuid,
+                    full_path: eventPath,
+                    folder_path: folderPath,
+                    banks: getBankNames(e),
+                    loop_type: detectLoopType(e),
+                    space: detectSpace(e),
+                    max_voices: maxVoices,
+                    notes: getNotesString(e),
+                    parameters: collectEventParameters(e),
+                    user_properties: getUserProperties(e),
+                    audio_files: audioFiles
+                };
+
+                eventsData.push(eventData);
+
+            } catch (err) {
+                console.log("Error processing event: " + (e.name || "") + " :: " + err);
+            }
+        }
+
+        // Get FMOD Studio version
+        // Try to extract from project path first (most reliable)
+        // Path format: .../FMOD Studio/2.02.33/...
+        var fmodVersion = "";
+        try {
+            var versionMatch = projectPath.match(/FMOD Studio[\/\\](\d+\.\d+\.\d+)/i);
+            if (versionMatch && versionMatch[1]) {
+                fmodVersion = versionMatch[1];
+            }
+        } catch (err) { }
+
+        // Fallback: try studio.version API
+        if (!fmodVersion || fmodVersion === "") {
+            try {
+                if (studio.version) {
+                    // Try stringValue or toString() first
+                    if (studio.version.stringValue) {
+                        fmodVersion = studio.version.stringValue;
+                    } else if (typeof studio.version.toString === "function") {
+                        var verStr = studio.version.toString();
+                        if (verStr && verStr.indexOf(".") > 0) {
+                            fmodVersion = verStr;
+                        }
+                    }
+                    // Fallback to major.minor.patch construction
+                    if (!fmodVersion || fmodVersion === "" || fmodVersion === "[object Object]") {
+                        var major = studio.version.major || 0;
+                        var minor = studio.version.minor || 0;
+                        var patch = studio.version.patch || 0;
+                        if (major > 0 || minor > 0 || patch > 0) {
+                            var minorStr = (minor < 10) ? ("0" + minor) : ("" + minor);
+                            fmodVersion = major + "." + minorStr + "." + patch;
+                        }
+                    }
+                }
+            } catch (err) { }
+        }
+
+        if (!fmodVersion || fmodVersion === "") {
+            fmodVersion = "Unknown";
+        }
+
+        // Build final JSON structure
+        var exportData = {
+            exported_at: getISOTimestamp(),
+            fmod_version: fmodVersion,
+            project_name: projectName,
+            project_path: projectPath,
+            event_count: eventsData.length,
+            events: eventsData
+        };
+
+        // Write JSON file
+        var file = studio.system.getFile(outputPath);
+        if (file.open(studio.system.openMode.WriteOnly)) {
+            file.writeText(JSON.stringify(exportData, null, 2));
+            file.close();
+
+            // Remember this directory for next time
+            saveLastExportDirectory(projectDirectory, outputDirectory);
+
+            var elapsedMs = Date.now() - t0;
+
+            alert(
+                "Export Complete!\n" +
+                "----------------------------------\n" +
+                "Events exported: " + eventsData.length + "\n" +
+                "Audio files found: " + totalAudioFiles + "\n" +
+                "Time: " + elapsedMs + "ms\n" +
+                "----------------------------------\n" +
+                "Output: " + outputPath + "\n\n" +
+                "Next step: Open Obsidian and run\n" +
+                "'FMOD Sync: Import from JSON'"
+            );
+        } else {
+            alert("Error: Could not write to file:\n" + outputPath);
+        }
+    }
+});

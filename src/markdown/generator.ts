@@ -1,5 +1,15 @@
-import type { FMODEvent } from "../types";
+import type { FMODEvent, FMODAudioFileNote } from "../types";
 import { parseFrontmatter, formatYamlProperty, extractUserSections } from "./frontmatter";
+
+/**
+ * Get the filename (without extension) from an audio file for wiki links.
+ */
+function getAudioFileNoteName(audioFilePath: string): string {
+	// Extract filename from path
+	const filename = audioFilePath.substring(audioFilePath.lastIndexOf("/") + 1);
+	// Note name includes extension (e.g., "hit.wav" -> "hit.wav.md")
+	return filename;
+}
 
 /**
  * Generate markdown content for an FMOD event.
@@ -33,6 +43,7 @@ export function generateMarkdown(
 		"fmod_space",
 		"fmod_max_voices",
 		"fmod_parameters",
+		"fmod_audio_files",
 		"fmod_last_synced",
 	];
 
@@ -63,6 +74,13 @@ export function generateMarkdown(
 	if (event.parameters.length > 0) {
 		mergedProps["fmod_parameters"] = event.parameters.map((p) => p.name);
 	}
+	// Add audio file wiki links
+	if (event.audio_files && event.audio_files.length > 0) {
+		mergedProps["fmod_audio_files"] = event.audio_files.map((af) => {
+			const filename = getAudioFileNoteName(af.asset_path || af.path);
+			return `[[${filename}]]`;
+		});
+	}
 	mergedProps["fmod_last_synced"] = exportedAt;
 
 	// Build YAML frontmatter
@@ -80,6 +98,7 @@ export function generateMarkdown(
 		"fmod_space",
 		"fmod_max_voices",
 		"fmod_parameters",
+		"fmod_audio_files",
 		"fmod_last_synced",
 	];
 
@@ -134,6 +153,106 @@ export function generateMarkdown(
 	}
 
 	// Preserved user sections
+	for (const [sectionName, content] of Object.entries(userSections)) {
+		md += `## ${sectionName}\n`;
+		md += content + "\n\n";
+	}
+
+	return yaml + md;
+}
+
+/**
+ * Generate markdown content for an audio file note.
+ * Preserves user properties and user-added sections from existing content.
+ */
+export function generateAudioFileMarkdown(
+	audioFile: FMODAudioFileNote,
+	existingContent: string | null,
+	exportedAt: string,
+	projectName: string
+): string {
+	// Parse existing frontmatter to preserve user properties
+	const existing = existingContent
+		? parseFrontmatter(existingContent)
+		: { properties: {}, bodyStart: 0 };
+
+	// Extract user-added sections
+	const userSections = existingContent
+		? extractUserSections(existingContent, existing.bodyStart)
+		: {};
+
+	// Audio file managed properties that will be overwritten
+	const fmodProperties = [
+		"fmod_path",
+		"fmod_asset_path",
+		"fmod_events",
+		"fmod_project",
+		"fmod_last_synced",
+	];
+
+	// Build merged properties
+	const mergedProps: Record<string, unknown> = {};
+
+	// First, copy existing user properties
+	for (const [key, value] of Object.entries(existing.properties)) {
+		if (!fmodProperties.includes(key)) {
+			mergedProps[key] = value;
+		}
+	}
+
+	// Then add FMOD properties
+	mergedProps["fmod_path"] = `ext://${audioFile.absolutePath}`;
+	if (audioFile.assetPath) {
+		mergedProps["fmod_asset_path"] = audioFile.assetPath;
+	}
+	// Add event wiki links
+	if (audioFile.eventNames.length > 0) {
+		mergedProps["fmod_events"] = audioFile.eventNames.map((name) => `[[${name}]]`);
+	}
+	mergedProps["fmod_project"] = projectName;
+	mergedProps["fmod_last_synced"] = exportedAt;
+
+	// Build YAML frontmatter
+	let yaml = "---\n";
+
+	// Output FMOD properties in order
+	const orderedKeys = [
+		"fmod_path",
+		"fmod_asset_path",
+		"fmod_events",
+		"fmod_project",
+		"fmod_last_synced",
+	];
+
+	const usedKeys = new Set<string>();
+
+	for (const key of orderedKeys) {
+		if (mergedProps[key] !== undefined && mergedProps[key] !== "") {
+			yaml += formatYamlProperty(key, mergedProps[key]);
+			usedKeys.add(key);
+		}
+	}
+
+	// Output remaining user properties
+	const remainingKeys = Object.keys(mergedProps)
+		.filter((k) => !usedKeys.has(k))
+		.sort();
+
+	for (const key of remainingKeys) {
+		yaml += formatYamlProperty(key, mergedProps[key]);
+	}
+
+	yaml += "---\n\n";
+
+	// Build markdown body
+	let md = "";
+
+	// Add audio player block
+	md += "```audioblock\n";
+	md += `ext://${audioFile.absolutePath}\n`;
+	md += "```\n\n";
+
+	// Preserve user sections
 	for (const [sectionName, content] of Object.entries(userSections)) {
 		md += `## ${sectionName}\n`;
 		md += content + "\n\n";

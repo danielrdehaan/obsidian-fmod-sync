@@ -23,6 +23,11 @@ export interface FMODUserProperty {
 	value: string | number | boolean;
 }
 
+export interface FMODAudioFile {
+	path: string;        // Absolute filesystem path
+	asset_path: string;  // Relative path in FMOD assets folder
+}
+
 export interface FMODEvent {
 	name: string;
 	guid: string;
@@ -35,6 +40,7 @@ export interface FMODEvent {
 	notes: string;
 	parameters: FMODParameter[];
 	user_properties: FMODUserProperty[];
+	audio_files?: FMODAudioFile[];
 }
 
 export interface FMODExportData {
@@ -98,6 +104,13 @@ export interface SyncProgress {
 export interface SkipReason {
 	event: string;
 	reason: string;
+}
+
+export interface FMODAudioFileNote {
+	filename: string;        // e.g., "hit.wav"
+	absolutePath: string;    // Filesystem path for ext:/// link
+	assetPath: string;       // Relative path in FMOD assets (for folder mirroring)
+	eventNames: string[];    // Events that use this file (for wiki links)
 }
 
 export interface ValidationResult {

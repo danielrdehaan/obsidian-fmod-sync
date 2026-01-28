@@ -12,7 +12,7 @@ export const DEFAULT_SETTINGS: FMODSyncSettings = {
 
 // Companion script constants
 export const FMOD_SCRIPT_FILENAME = "FMOD_Obsidian_Sync.js";
-export const FMOD_SCRIPT_URL = "https://raw.githubusercontent.com/danielrdehaan/Scripts/main/FMOD/FMOD_Obsidian_Sync.js";
+export const FMOD_SCRIPT_URL = "https://raw.githubusercontent.com/danielrdehaan/obsidian-fmod-sync/main/scripts/FMOD_Obsidian_Sync.js";
 
 // Filename limits
 export const MAX_FILENAME_LENGTH = 200;

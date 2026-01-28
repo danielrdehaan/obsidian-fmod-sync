@@ -1,9 +1,9 @@
 import { TFile, TFolder, normalizePath } from "obsidian";
 import type { App } from "obsidian";
-import type { FMODEvent, SyncStats, SkipReason } from "../types";
+import type { FMODEvent, FMODAudioFileNote, SyncStats, SkipReason } from "../types";
 import { sanitizeFilename } from "../utils/filename";
 import { parseFrontmatter } from "../markdown/frontmatter";
-import { generateMarkdown } from "../markdown/generator";
+import { generateMarkdown, generateAudioFileMarkdown } from "../markdown/generator";
 
 /**
  * Ensure a folder exists in the vault, creating it and parent folders if needed.
@@ -148,6 +148,100 @@ export async function processEvent(
 		} else {
 			await app.vault.create(targetPath, markdown);
 			stats.created++;
+		}
+	}
+}
+
+/**
+ * Process audio file notes - create/update notes for all audio files.
+ */
+export async function processAudioFiles(
+	app: App,
+	audioFileNotes: FMODAudioFileNote[],
+	outputPath: string,
+	existingNotes: Map<string, string>,
+	exportedAt: string,
+	projectName: string,
+	stats: SyncStats
+): Promise<void> {
+	const audioFilesFolder = normalizePath(`${outputPath}/Audio Files`);
+	await ensureFolderExists(app, audioFilesFolder);
+
+	// Build index of existing audio file notes by path (fmod_path property)
+	const notesByPath = new Map<string, { path: string; content: string }>();
+	for (const [notePath, content] of existingNotes) {
+		const frontmatter = parseFrontmatter(content);
+		const fmodPath = frontmatter.properties["fmod_path"] as string | undefined;
+		if (fmodPath) {
+			// Extract the actual path from ext:/// URL
+			const actualPath = fmodPath.replace(/^ext:\/\//, "");
+			notesByPath.set(actualPath, { path: notePath, content });
+		}
+	}
+
+	for (const audioFile of audioFileNotes) {
+		try {
+			// Calculate target path based on asset_path (mirroring FMOD folder structure)
+			let targetPath: string;
+			if (audioFile.assetPath && audioFile.assetPath.includes("/")) {
+				// Get folder from asset path
+				const assetFolder = audioFile.assetPath.substring(0, audioFile.assetPath.lastIndexOf("/"));
+				const sanitizedFolder = assetFolder
+					.split("/")
+					.map((s) => sanitizeFilename(s))
+					.join("/");
+				targetPath = normalizePath(`${audioFilesFolder}/${sanitizedFolder}/${sanitizeFilename(audioFile.filename)}.md`);
+			} else {
+				targetPath = normalizePath(`${audioFilesFolder}/${sanitizeFilename(audioFile.filename)}.md`);
+			}
+
+			// Check for existing note by path
+			const existingByPath = notesByPath.get(audioFile.absolutePath);
+			let existingContent: string | null = null;
+			let existingPath: string | null = null;
+			let needsMove = false;
+
+			if (existingByPath) {
+				existingContent = existingByPath.content;
+				existingPath = existingByPath.path;
+				needsMove = existingPath !== targetPath;
+			}
+
+			// Ensure target folder exists
+			const targetFolder = targetPath.substring(0, targetPath.lastIndexOf("/"));
+			if (targetFolder) {
+				await ensureFolderExists(app, targetFolder);
+			}
+
+			// Generate markdown content
+			const markdown = generateAudioFileMarkdown(
+				audioFile,
+				existingContent,
+				exportedAt,
+				projectName
+			);
+
+			// Write or update file
+			if (needsMove && existingPath) {
+				const oldFile = app.vault.getAbstractFileByPath(existingPath);
+				if (oldFile instanceof TFile) {
+					await app.vault.delete(oldFile);
+				}
+				await app.vault.create(targetPath, markdown);
+				stats.moved++;
+			} else {
+				const existingFile = app.vault.getAbstractFileByPath(targetPath);
+				if (existingFile instanceof TFile) {
+					await app.vault.modify(existingFile, markdown);
+					stats.updated++;
+				} else {
+					await app.vault.create(targetPath, markdown);
+					stats.created++;
+				}
+			}
+		} catch (error) {
+			console.error(`FMOD Sync: Error processing audio file ${audioFile.filename}:`, error);
+			stats.errors++;
 		}
 	}
 }

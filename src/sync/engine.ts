@@ -3,6 +3,7 @@ import type { App } from "obsidian";
 import type {
 	FMODProjectConfig,
 	FMODExportData,
+	FMODAudioFileNote,
 	SyncStats,
 	SyncProgress,
 	SkipReason,
@@ -10,7 +11,7 @@ import type {
 import { validateExportData } from "../utils/validation";
 import { parseFrontmatter } from "../markdown/frontmatter";
 import { readJsonFile } from "./json-reader";
-import { ensureFolderExists, scanExistingNotes, processEvent } from "./processor";
+import { ensureFolderExists, scanExistingNotes, processEvent, processAudioFiles } from "./processor";
 
 export interface SyncEngineCallbacks {
 	onProgress?: (progress: SyncProgress) => void;
@@ -84,19 +85,31 @@ export async function syncSingleProject(
 		);
 	}
 
-	// Use project's output folder
+	// Use project's output folder with Events subfolder for event notes
 	const outputPath = normalizePath(project.outputFolder);
+	const eventsPath = normalizePath(`${outputPath}/Events`);
+	const audioFilesPath = normalizePath(`${outputPath}/Audio Files`);
 	await ensureFolderExists(app, outputPath);
+	await ensureFolderExists(app, eventsPath);
 
 	// Report scanning phase
 	onProgress?.({ phase: "scanning", current: 0, total: 0, eventName: "" });
 
-	// Build index of existing notes by GUID and filename
-	const existingNotes = await scanExistingNotes(app, outputPath);
+	// Build index of existing event notes by GUID and filename
+	// Scan both the new Events subfolder and the root for migration support
+	const existingEventNotes = await scanExistingNotes(app, eventsPath);
+	const existingRootNotes = await scanExistingNotes(app, outputPath);
+
+	// Merge notes, preferring Events subfolder
+	const allEventNotes = new Map([...existingRootNotes, ...existingEventNotes]);
+
 	const notesByGuid = new Map<string, { path: string; content: string }>();
 	const notesByName = new Map<string, { path: string; content: string }>();
 
-	for (const [notePath, content] of existingNotes) {
+	for (const [notePath, content] of allEventNotes) {
+		// Skip notes in Audio Files folder
+		if (notePath.startsWith(audioFilesPath)) continue;
+
 		const frontmatter = parseFrontmatter(content);
 		const guid = frontmatter.properties["fmod_guid"] as string | undefined;
 		const filename = notePath.split("/").pop()?.replace(".md", "") || "";
@@ -106,6 +119,9 @@ export async function syncSingleProject(
 		}
 		notesByName.set(filename, { path: notePath, content });
 	}
+
+	// Scan existing audio file notes
+	const existingAudioNotes = await scanExistingNotes(app, audioFilesPath);
 
 	// Process events
 	const stats: SyncStats = {
@@ -119,6 +135,9 @@ export async function syncSingleProject(
 	const skippedEvents: SkipReason[] = [];
 	const total = exportData.events.length;
 
+	// Collect audio files across all events for bidirectional linking
+	const audioFileMap = new Map<string, FMODAudioFileNote>();
+
 	for (let i = 0; i < total; i++) {
 		const event = exportData.events[i];
 
@@ -131,10 +150,11 @@ export async function syncSingleProject(
 		});
 
 		try {
+			// Process event note (now in Events subfolder)
 			await processEvent(
 				app,
 				event,
-				outputPath,
+				eventsPath,
 				notesByGuid,
 				notesByName,
 				exportData.exported_at,
@@ -142,10 +162,51 @@ export async function syncSingleProject(
 				stats,
 				skippedEvents
 			);
+
+			// Collect audio files for this event
+			if (event.audio_files && event.audio_files.length > 0) {
+				for (const audioFile of event.audio_files) {
+					const key = audioFile.path; // Use absolute path as unique key
+					const existing = audioFileMap.get(key);
+
+					if (existing) {
+						// Audio file already seen, add this event to its list
+						if (!existing.eventNames.includes(event.name)) {
+							existing.eventNames.push(event.name);
+						}
+					} else {
+						// New audio file
+						const filename = audioFile.asset_path
+							? audioFile.asset_path.substring(audioFile.asset_path.lastIndexOf("/") + 1)
+							: audioFile.path.substring(audioFile.path.lastIndexOf("/") + 1);
+
+						audioFileMap.set(key, {
+							filename,
+							absolutePath: audioFile.path,
+							assetPath: audioFile.asset_path || "",
+							eventNames: [event.name],
+						});
+					}
+				}
+			}
 		} catch (error) {
 			console.error(`FMOD Sync: Error processing event ${event.name}:`, error);
 			stats.errors++;
 		}
+	}
+
+	// Process audio file notes
+	const audioFileNotes = Array.from(audioFileMap.values());
+	if (audioFileNotes.length > 0) {
+		await processAudioFiles(
+			app,
+			audioFileNotes,
+			outputPath,
+			existingAudioNotes,
+			exportData.exported_at,
+			projectName,
+			stats
+		);
 	}
 
 	// Report completion
