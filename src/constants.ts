@@ -16,3 +16,9 @@ export const FMOD_SCRIPT_URL = "https://raw.githubusercontent.com/danielrdehaan/
 
 // Filename limits
 export const MAX_FILENAME_LENGTH = 200;
+
+// FMOD TCP connection constants
+export const FMOD_TCP_PORT = 3663;
+export const FMOD_TCP_HOST = "127.0.0.1";
+export const FMOD_CONNECTION_TIMEOUT = 5000;
+export const FMOD_LAUNCH_TIMEOUT = 30000;

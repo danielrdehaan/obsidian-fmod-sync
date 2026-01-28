@@ -105,3 +105,9 @@ export interface ValidationResult {
 	data?: FMODExportData;
 	errors: string[];
 }
+
+export interface FMODConnectionResult {
+	success: boolean;
+	response?: string;
+	error?: string;
+}

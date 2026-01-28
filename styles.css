@@ -329,3 +329,11 @@
 	width: 16px;
 	height: 16px;
 }
+
+/* Clickable event:/ links in notes */
+.fmod-event-link {
+	color: var(--link-color);
+	text-decoration-line: underline;
+	text-decoration-style: dotted;
+	cursor: pointer;
+}
